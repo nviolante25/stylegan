@@ -17,6 +17,7 @@ class ModulatedConv2d(nn.Conv2d):
         padding_mode="zeros",
         device=None,
         dtype=None,
+        w_dim=512,
     ):
         super().__init__(
             in_channels,
@@ -31,13 +32,14 @@ class ModulatedConv2d(nn.Conv2d):
             device,
             dtype,
         )
+        self.affine = nn.Linear(w_dim, in_channels, device=device)
 
-    def forward(self, input, style_vectors):
+    def forward(self, input, w):
         """Modulated convolutional 2D forward pass without bias
 
         Args:
-            - input        : [batch_size, channels_in, height, width]
-            - style_vectors: [batch_size, channels_in, 1, 1]
+            - input: [batch_size, channels_in, height, width]
+            - w    : [batch_size, channels_in, 1, 1]
 
         Modulation:
             - For each feature map in input, the weights self.weight of shape
@@ -45,22 +47,20 @@ class ModulatedConv2d(nn.Conv2d):
             vector of shape [1, channels_in, 1, 1]
 
         """
-        batch_size = style_vectors.shape[0]
+        style = self.affine(w)
+        batch_size = style.shape[0]
         outputs = []
         for i in range(batch_size):
-            weight = self._modulate(style_vectors[i])
+            weight = self._modulate_weight(style[i])
             outputs.append(self._conv_forward(input[i], weight, None))
-        return torch.stack(outputs)
+        return torch.stack(outputs) + self.bias.view(-1, 1, 1)
 
-    def _modulate(self, style_vector):
-        weight = style_vector.view(1, -1, 1, 1) * self.weight
+    def _modulate_weight(self, style):
+        weight = style.view(1, -1, 1, 1) * self.weight
         weight /= torch.sqrt(
             torch.sum(weight**2, dim=(1, 2, 3), keepdim=True) + 1e-8
         )
         return weight
-
-    def apply_bias(self, input):
-        return input + self.bias.view(-1, 1, 1)
 
 
 class MappingNetwork(nn.Module):
@@ -73,7 +73,9 @@ class MappingNetwork(nn.Module):
 
 
 class Generator(nn.Module):
-    def __init__(self) -> None:
+    def __init__(self,
+        w_dim=512
+    ):
         super().__init__()
         self.init_const = nn.Parameter(
             torch.zeros((1, 512, 4, 4)), requires_grad=True
@@ -82,11 +84,16 @@ class Generator(nn.Module):
         self.init_conv = nn.Conv2d(512, 256, 3, 1, 1)
         self.conv_layers = nn.ModuleList(
             [
-                ModulatedConv2d(256, 128, 3, 1, 1),
-                ModulatedConv2d(128, 64, 3, 1, 1),
+                ModulatedConv2d(256, 128, 3, 1, 1, w_dim=w_dim),
+                ModulatedConv2d(128, 64, 3, 1, 1, w_dim=w_dim),
             ]
         )
-        self.affine = nn.ModuleList([nn.Linear(512, 256), nn.Linear(512, 128)])
+        self.to_rgb_layers = nn.ModuleList(
+            [
+                nn.Conv2d(128, 3, 1),
+                nn.Conv2d(64, 3, 1)
+            ]
+        )
         self.upsample = nn.Upsample(scale_factor=2, mode="bilinear")
 
     def forward(self, w):
@@ -96,12 +103,12 @@ class Generator(nn.Module):
         x = self.init_conv(x)
         x = F.leaky_relu(x, 0.2).repeat(batch_size, 1, 1, 1)
 
+        rgb_image = torch.zeros((batch_size, 3, 4, 4)).to(x.device)
         for i, conv in enumerate(self.conv_layers):
             x = self.upsample(x)
-            style = self.affine[i](w)
-            x = conv(x, style)
-            x = conv.apply_bias(x)
+            x = conv(x, w)
             x = F.leaky_relu(x, 0.2)
+            rgb_image = self.upsample(rgb_image) + F.leaky_relu(self.to_rgb_layers[i](x), 0.2)
         return x
 
 
@@ -116,6 +123,7 @@ class StyleGAN(nn.Module):
 
 
 if __name__ == "__main__":
+    torch.manual_seed(0)
     mapping_network = MappingNetwork().cuda()
     generator = Generator().cuda()
     z = torch.randn((7, 512)).cuda()
