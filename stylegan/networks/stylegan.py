@@ -2,7 +2,7 @@ from turtle import forward
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from collections import OrderedDict
+import math
 
 
 class StyleConv2d(nn.Conv2d):
@@ -84,7 +84,7 @@ class StyleConv2d(nn.Conv2d):
             )
         return weight
 
-class StyleBlock(nn.Module):
+class GeneratorBlock(nn.Module):
     """
     1. Upsample input by a factor of 2
     2. Apply two StyleConvolutions, each followed by a LeakyReLu
@@ -156,7 +156,7 @@ class Generator(nn.Module):
         while res < resolution:
             next_res = 2 * res
             self.style_blocks.append(
-                StyleBlock(in_channels[res], in_channels[next_res], w_dim)
+                GeneratorBlock(in_channels[res], in_channels[next_res], w_dim)
             )
             res = next_res
 
@@ -173,10 +173,72 @@ class Generator(nn.Module):
 
         return rgb_image
 
-
-class StyleDiscriminator(nn.Module):
-    def __init__(self) -> None:
+class DiscriminatorBlock(nn.Module):
+    def __init__(self,
+        in_channels,
+        out_channels
+    ) -> None:
         super().__init__()
+        self.convs = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, 3, 1, 1),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(out_channels, out_channels, 3, 1, 1),
+            nn.LeakyReLU(0.2),
+            nn.Upsample(scale_factor=0.5, mode='bilinear'),
+        )
+        self.skip = nn.Sequential(
+            nn.Upsample(scale_factor=0.5, mode='bilinear'),
+            nn.Conv2d(in_channels, out_channels, 1, 1, 0),
+            nn.LeakyReLU(0.2),
+        )
+
+    def forward(self, x):
+        out = self.convs(x) + self.skip(x)
+        return out / math.sqrt(2.0)
+
+
+class Discriminator(nn.Module):
+    def __init__(self,
+        resolution=1024
+    ) -> None:
+        super().__init__()
+        in_channels = {
+            1024: 32,
+            512:  64,
+            256:  128,
+            128:  256,
+            64:   512,
+            32:   512,
+            16:   512,
+            8:    512,
+            4:    512,
+        }
+        res = resolution
+        self.from_rgb = nn.Conv2d(3, in_channels[res], 3, 1, 1)
+        blocks = []
+        while res > 4:
+            prev_res = res // 2
+            blocks.append(DiscriminatorBlock(in_channels[res], in_channels[prev_res]))
+            res = prev_res
+
+        self.blocks = nn.Sequential(*blocks)
+        self.final_conv = nn.Sequential(
+            nn.Conv2d(in_channels[4], in_channels[4], 4, 1, 0),
+            nn.LeakyReLU(0.2),
+        )
+        self.final_linear = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(in_channels[4], 1),
+            nn.LeakyReLU(0.2)
+        )
+
+    def forward(self, x):
+        x = self.from_rgb(x)
+        x = self.blocks(x)
+        x = self.final_conv(x)
+        x = self.final_linear(x)
+        return x
+
 
 
 class StyleGAN(nn.Module):
@@ -188,10 +250,11 @@ if __name__ == "__main__":
     torch.manual_seed(0)
     mapping_network = MappingNetwork()
     generator = Generator()
+    discriminator = Discriminator()
     z = torch.randn((2, 512))
     w = mapping_network(z)
-    with torch.no_grad():
-        image = generator(w)
+    image = generator(w)
+    a = discriminator(image)
     print()
     for name, param in generator.named_parameters():
         if param.requires_grad:
