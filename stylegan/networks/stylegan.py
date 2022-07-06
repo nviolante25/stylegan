@@ -111,7 +111,7 @@ class GeneratorBlock(nn.Module):
         x = self.upsample(x)
         for conv in self.convs:
             x = F.leaky_relu(conv(x, w), 0.2)
-        rgb_image = F.leaky_relu(self.to_rgb(x, w), 0.2)
+        rgb_image = self.to_rgb(x, w)
         return x, rgb_image
 
 
@@ -229,7 +229,6 @@ class Discriminator(nn.Module):
         self.final_linear = nn.Sequential(
             nn.Flatten(),
             nn.Linear(in_channels[4], 1),
-            nn.LeakyReLU(0.2)
         )
 
     def forward(self, x):
@@ -241,10 +240,17 @@ class Discriminator(nn.Module):
 
 
 
-class StyleGAN(nn.Module):
-    def __init__(self) -> None:
+class StyleGAN2(nn.Module):
+    def __init__(self,
+        z_dim=512,
+        w_dim=512,
+        mapping_layers=8,
+        resolution=1024,
+    ) -> None:
         super().__init__()
-
+        self.mapping_network = MappingNetwork(z_dim, w_dim, mapping_layers)
+        self.generator = Generator(w_dim, resolution)
+        self.discriminator = Discriminator(resolution)
 
 if __name__ == "__main__":
     torch.manual_seed(0)
