@@ -1,10 +1,10 @@
 import torch.nn.functional as F
 
 
-def generator_loss(fake_logit):
+def generator_loss(fake_logits):
     """Returns non-staurating loss for the generator
 
-    The original generator loss log(1 - D(fake)) suffers from vanishing 
+    The original generator loss log(1 - D(fake)) suffers from vanishing
     gradients when D(fake)=0 (zero loss).
     The non-staurating loss -log D(fake) guarantees strong gradients.
 
@@ -12,10 +12,10 @@ def generator_loss(fake_logit):
         - softplus(x) := log(1 + exp(x))
         - -log sigmoid(fake_logit) = softplus(-fake_logit)
     """
-    return F.softplus(-fake_logit).mean()
+    return F.softplus(-fake_logits).mean()
 
 
-def discriminator_loss(real_logit, fake_logit):
+def discriminator_loss(real_logits, fake_logits):
     """Returns discriminator loss: -log D(real) - log(1 - D(fake)).
 
     Trick:
@@ -23,4 +23,29 @@ def discriminator_loss(real_logit, fake_logit):
         - -log sigmoid(real_logit) = softplus(-real_logit)
         - -log(1 - sigmoid(fake_logit)) = softplus(fake_logit)
     """
-    return F.softplus(-real_logit).mean() + F.softplus(fake_logit).mean()
+    return F.softplus(-real_logits).mean() + F.softplus(fake_logits).mean()
+
+
+def r1_loss(real_logits, real_images):
+
+    # Need to set create_graph=True to backpropagate the loss afterwards
+    discriminator_grad = torch.autograd.grad(
+        outputs=real_logits.sum(), inputs=real_images, create_graph=True
+    )[0]
+    batch_size = discriminator_grad.shape[0]
+    r1_penalty = (discriminator_grad.view(batch_size, -1) ** 2).sum(1).mean()
+    return r1_penalty
+
+
+from networks.stylegan import Discriminator
+import torch
+
+if __name__ == "__main__":
+    torch.manual_seed(1)
+    d = Discriminator(512).cuda()
+    image = torch.randn((7, 3, 512, 512)).cuda()
+    image.requires_grad = True
+    logit = d(image)
+    loss = r1_loss(logit, image)
+
+    print()

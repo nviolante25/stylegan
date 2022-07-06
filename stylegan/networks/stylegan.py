@@ -20,7 +20,7 @@ class StyleConv2d(nn.Conv2d):
         device=None,
         dtype=None,
         w_dim=512,
-        demodulate=True
+        demodulate=True,
     ):
         super().__init__(
             in_channels,
@@ -60,9 +60,10 @@ class StyleConv2d(nn.Conv2d):
         #     outputs.append(self._conv_forward(input[i], weight, None))
         # return torch.stack(outputs) + self.bias.view(-1, 1, 1)
 
-
         # weight [batch_size, out_channels, in_channels, h, w]
-        weight = self.weight.repeat(batch_size, 1, 1, 1, 1) * style.view(batch_size, 1, in_channels, 1, 1)
+        weight = self.weight.repeat(batch_size, 1, 1, 1, 1) * style.view(
+            batch_size, 1, in_channels, 1, 1
+        )
         if self.demodulate:
             weight /= torch.sqrt(
                 torch.sum(weight**2, dim=(-3, -2, -1), keepdim=True) + 1e-8
@@ -71,7 +72,7 @@ class StyleConv2d(nn.Conv2d):
         output = self._conv_forward(
             input.view(1, -1, height, width),
             weight.view(-1, in_channels, *self.kernel_size),
-            self.bias.repeat(batch_size, 1).view(-1)
+            self.bias.repeat(batch_size, 1).view(-1),
         ).view(batch_size, -1, height, width)
         return output
 
@@ -84,28 +85,32 @@ class StyleConv2d(nn.Conv2d):
             )
         return weight
 
+
 class GeneratorBlock(nn.Module):
     """
     1. Upsample input by a factor of 2
     2. Apply two StyleConvolutions, each followed by a LeakyReLu
     3. Apply one 1x1 StyleConvolution (with no demodulation) to generate RGB
     """
-    def __init__(self,
+
+    def __init__(
+        self,
         in_channels,
         out_channels,
         w_dim,
     ) -> None:
         super().__init__()
 
-        self.upsample = nn.Upsample(scale_factor=2.0, mode='bilinear')
+        self.upsample = nn.Upsample(scale_factor=2.0, mode="bilinear")
         self.convs = nn.ModuleList(
             [
                 StyleConv2d(in_channels, out_channels, 3, 1, 1, w_dim=w_dim),
                 StyleConv2d(out_channels, out_channels, 3, 1, 1, w_dim=w_dim),
             ]
         )
-        self.to_rgb = StyleConv2d(out_channels, 3, 1, w_dim=w_dim, demodulate=False)
-
+        self.to_rgb = StyleConv2d(
+            out_channels, 3, 1, w_dim=w_dim, demodulate=False
+        )
 
     def forward(self, x, w):
         x = self.upsample(x)
@@ -129,21 +134,18 @@ class MappingNetwork(nn.Module):
 
 
 class Generator(nn.Module):
-    def __init__(self,
-        w_dim=512,
-        resolution=1024
-    ):
+    def __init__(self, w_dim=512, resolution=1024):
         super().__init__()
         in_channels = {
-            4:    512,
-            8:    512,
-            16:   512,
-            32:   512,
-            64:   512,
-            128:  256,
-            256:  128,
-            512:  64,
-            1024: 32
+            4: 512,
+            8: 512,
+            16: 512,
+            32: 512,
+            64: 512,
+            128: 256,
+            256: 128,
+            512: 64,
+            1024: 32,
         }
         res = 4
         self.init_const = nn.Parameter(
@@ -151,7 +153,9 @@ class Generator(nn.Module):
         )
         nn.init.normal_(self.init_const)
 
-        self.init_conv = StyleConv2d(in_channels[res], in_channels[res], 3, 1, 1, w_dim=w_dim)
+        self.init_conv = StyleConv2d(
+            in_channels[res], in_channels[res], 3, 1, 1, w_dim=w_dim
+        )
         self.style_blocks = nn.ModuleList()
         while res < resolution:
             next_res = 2 * res
@@ -169,25 +173,25 @@ class Generator(nn.Module):
         rgb_image = torch.zeros((batch_size, 3, 4, 4)).to(w.device)
         for block in self.style_blocks:
             x, intermediate_rgb_image = block(x, w)
-            rgb_image = intermediate_rgb_image +  F.interpolate(rgb_image, scale_factor=2, mode='bilinear')
+            rgb_image = intermediate_rgb_image + F.interpolate(
+                rgb_image, scale_factor=2, mode="bilinear"
+            )
 
         return rgb_image
 
+
 class DiscriminatorBlock(nn.Module):
-    def __init__(self,
-        in_channels,
-        out_channels
-    ) -> None:
+    def __init__(self, in_channels, out_channels) -> None:
         super().__init__()
         self.convs = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, 3, 1, 1),
             nn.LeakyReLU(0.2),
             nn.Conv2d(out_channels, out_channels, 3, 1, 1),
             nn.LeakyReLU(0.2),
-            nn.Upsample(scale_factor=0.5, mode='bilinear'),
+            nn.Upsample(scale_factor=0.5, mode="bilinear"),
         )
         self.skip = nn.Sequential(
-            nn.Upsample(scale_factor=0.5, mode='bilinear'),
+            nn.Upsample(scale_factor=0.5, mode="bilinear"),
             nn.Conv2d(in_channels, out_channels, 1, 1, 0),
             nn.LeakyReLU(0.2),
         )
@@ -198,27 +202,27 @@ class DiscriminatorBlock(nn.Module):
 
 
 class Discriminator(nn.Module):
-    def __init__(self,
-        resolution=1024
-    ) -> None:
+    def __init__(self, resolution=1024) -> None:
         super().__init__()
         in_channels = {
             1024: 32,
-            512:  64,
-            256:  128,
-            128:  256,
-            64:   512,
-            32:   512,
-            16:   512,
-            8:    512,
-            4:    512,
+            512: 64,
+            256: 128,
+            128: 256,
+            64: 512,
+            32: 512,
+            16: 512,
+            8: 512,
+            4: 512,
         }
         res = resolution
         self.from_rgb = nn.Conv2d(3, in_channels[res], 3, 1, 1)
         blocks = []
         while res > 4:
             prev_res = res // 2
-            blocks.append(DiscriminatorBlock(in_channels[res], in_channels[prev_res]))
+            blocks.append(
+                DiscriminatorBlock(in_channels[res], in_channels[prev_res])
+            )
             res = prev_res
 
         self.blocks = nn.Sequential(*blocks)
@@ -239,9 +243,9 @@ class Discriminator(nn.Module):
         return x
 
 
-
 class StyleGAN2(nn.Module):
-    def __init__(self,
+    def __init__(
+        self,
         z_dim=512,
         w_dim=512,
         mapping_layers=8,
@@ -251,6 +255,7 @@ class StyleGAN2(nn.Module):
         self.mapping_network = MappingNetwork(z_dim, w_dim, mapping_layers)
         self.generator = Generator(w_dim, resolution)
         self.discriminator = Discriminator(resolution)
+
 
 if __name__ == "__main__":
     torch.manual_seed(0)
