@@ -65,7 +65,7 @@ class StyleConv2d(nn.Conv2d):
             batch_size, 1, in_channels, 1, 1
         )
         if self.demodulate:
-            weight /= torch.sqrt(
+            weight = weight / torch.sqrt(
                 torch.sum(weight**2, dim=(-3, -2, -1), keepdim=True) + 1e-8
             )
         self.groups = batch_size
