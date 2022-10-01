@@ -3,11 +3,12 @@ import numpy as np
 from PIL import Image
 from pathlib import Path
 from collections import OrderedDict
-from torchvision.transforms import ToTensor, Compose, Resize
-from torch.utils.data import Dataset, DataLoader, Sampler
+from torchvision.transforms import ToTensor, Compose, Lambda
+from torch.utils.data import Dataset, Sampler
+from pathlib import Path
 
 
-class EasyDict(OrderedDict):
+class ConfigDict(OrderedDict):
     def __getattr__(self, key):
         try:
             return self[key]
@@ -43,10 +44,10 @@ class Transform:
 class ImageDataset(Dataset):
    def __init__(self, source_dir, transform):
       super().__init__()
-      self._transform = transform
+      self._transform = Transform(Compose([ToTensor(), Lambda(lambda x: 2.0 * x - 1.0)]))
       self._image_paths = self._get_image_paths(source_dir)
       self._image_shape = list(self[0].shape)
-      self._info = EasyDict(dir=source_dir,
+      self._info = ConfigDict(dir=source_dir,
                             total_images=len(self),
                             image_shape=self._image_shape,
       )
@@ -61,8 +62,8 @@ class ImageDataset(Dataset):
       return len(self._image_paths)
 
    def __getitem__(self, idx):
-      image_array = np.array(Image.open(self._image_paths[idx]))
-      image_tensor = self._transform(image_array)
+      image = Image.open(self._image_paths[idx])
+      image_tensor = self._transform(image)
       return image_tensor
 
    @property
@@ -101,19 +102,10 @@ class InfiniteSampler(Sampler):
          yield indices[idx]
          i += 1
 
-if __name__ == "__main__":
-   transform = Transform(Compose([ToTensor(), Resize((128, 128))]))
-   dataset = ImageDataset('/home/nviolante/datasets/style_transfer/',
-                          transform)
-   dataloader = DataLoader(dataset, batch_size=4, shuffle=True)
-   import torch
-   
-   
-
-
-
-   sampler = InfiniteSampler(dataset, 0)
-   for e in sampler:
-      print(e)
-   print()
-
+def create_output_folder(dest, data):
+   os.makedirs(dest, exist_ok=True)
+   dataset_name = Path(data).name
+   num = len(os.listdir(dest))
+   outdir = os.path.join(dest, f"{str(num).zfill(4)}-stylegan-{dataset_name}")
+   os.makedirs(outdir)
+   return outdir

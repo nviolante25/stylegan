@@ -54,20 +54,9 @@ class StyleConv2d(nn.Conv2d):
         style = self.affine(w)
         batch_size, in_channels, height, width = input.shape
 
-        # outputs = []
-        # for i in range(batch_size):
-        #     weight = self._modulate_weight(style[i])
-        #     outputs.append(self._conv_forward(input[i], weight, None))
-        # return torch.stack(outputs) + self.bias.view(-1, 1, 1)
-
-        # weight [batch_size, out_channels, in_channels, h, w]
-        weight = self.weight.repeat(batch_size, 1, 1, 1, 1) * style.view(
-            batch_size, 1, in_channels, 1, 1
-        )
+        weight = self.weight.repeat(batch_size, 1, 1, 1, 1) * style.view(batch_size, 1, in_channels, 1, 1)
         if self.demodulate:
-            weight = weight / torch.sqrt(
-                torch.sum(weight**2, dim=(-3, -2, -1), keepdim=True) + 1e-8
-            )
+            weight = weight / torch.sqrt(torch.sum(weight**2, dim=(-3, -2, -1), keepdim=True) + 1e-8)
         self.groups = batch_size
         output = self._conv_forward(
             input.view(1, -1, height, width),
@@ -76,14 +65,18 @@ class StyleConv2d(nn.Conv2d):
         ).view(batch_size, -1, height, width)
         return output
 
-    def _modulate_weight(self, style):
-        # weight [channels_out, channels_in, kernel_size[0], kernel_size[1]]
-        weight = style.view(1, -1, 1, 1) * self.weight
-        if self.demodulate:
-            weight /= torch.sqrt(
-                torch.sum(weight**2, dim=(1, 2, 3), keepdim=True) + 1e-8
-            )
-        return weight
+
+class MappingNetwork(nn.Module):
+    def __init__(self, z_dim=512, w_dim=512, num_layers=8):
+        super().__init__()
+        layers = [nn.Linear(z_dim, w_dim), nn.LeakyReLU(0.2)]
+        for _ in range(num_layers - 1):
+            layers.append(nn.Linear(w_dim, w_dim))
+            layers.append(nn.LeakyReLU(0.2))
+        self.layers = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.layers(x)
 
 
 class GeneratorBlock(nn.Module):
@@ -120,21 +113,8 @@ class GeneratorBlock(nn.Module):
         return x, rgb_image
 
 
-class MappingNetwork(nn.Module):
-    def __init__(self, z_dim=512, w_dim=512, num_layers=8):
-        super().__init__()
-        layers = [nn.Linear(z_dim, w_dim), nn.LeakyReLU(0.2)]
-        for _ in range(num_layers - 1):
-            layers.append(nn.Linear(w_dim, w_dim))
-            layers.append(nn.LeakyReLU(0.2))
-        self.layers = nn.Sequential(*layers)
-
-    def forward(self, x):
-        return self.layers(x)
-
-
 class Generator(nn.Module):
-    def __init__(self, w_dim=512, resolution=1024):
+    def __init__(self, z_dim=512, w_dim=512, resolution=1024, num_layers_mapping=8, device='cuda'):
         super().__init__()
         in_channels = {
             4: 512,
@@ -147,6 +127,16 @@ class Generator(nn.Module):
             512: 64,
             1024: 32,
         }
+        self.z_dim = z_dim
+        self.w_dim = w_dim
+        self.resolution = resolution
+
+        self.mapping_network = MappingNetwork(z_dim, w_dim, num_layers_mapping)
+        self._init_generator(w_dim, resolution, in_channels)
+        self.device = device
+        self.to(device)
+
+    def _init_generator(self, w_dim, resolution, in_channels):
         res = 4
         self.init_const = nn.Parameter(
             torch.zeros((1, in_channels[res], res, res)), requires_grad=True
@@ -159,25 +149,25 @@ class Generator(nn.Module):
         self.style_blocks = nn.ModuleList()
         while res < resolution:
             next_res = 2 * res
-            self.style_blocks.append(
-                GeneratorBlock(in_channels[res], in_channels[next_res], w_dim)
-            )
+            self.style_blocks.append(GeneratorBlock(in_channels[res], in_channels[next_res], w_dim))
             res = next_res
 
-    def forward(self, w):
-        assert w.dim() == 2
-        batch_size = w.shape[0]
+    def forward(self, z):
+        assert z.dim() == 2
+        batch_size = z.shape[0]
+        w = self.mapping_network(z)
         x = self.init_const.repeat(batch_size, 1, 1, 1)
         x = self.init_conv(x, w)
 
         rgb_image = torch.zeros((batch_size, 3, 4, 4)).to(w.device)
         for block in self.style_blocks:
             x, intermediate_rgb_image = block(x, w)
-            rgb_image = intermediate_rgb_image + F.interpolate(
-                rgb_image, scale_factor=2, mode="bilinear"
-            )
+            rgb_image = intermediate_rgb_image + F.interpolate(rgb_image, scale_factor=2, mode="bilinear")
 
         return rgb_image
+
+    def sample_z(self, batch_size):
+        return torch.randn((batch_size, self.z_dim), device=self.device)
 
 
 class DiscriminatorBlock(nn.Module):
@@ -202,7 +192,7 @@ class DiscriminatorBlock(nn.Module):
 
 
 class Discriminator(nn.Module):
-    def __init__(self, resolution=1024) -> None:
+    def __init__(self, resolution=1024, device='cuda') -> None:
         super().__init__()
         in_channels = {
             1024: 32,
@@ -234,6 +224,8 @@ class Discriminator(nn.Module):
             nn.Flatten(),
             nn.Linear(in_channels[4], 1),
         )
+        self.device = device
+        self.to(device)
 
     def forward(self, x):
         x = self.from_rgb(x)
@@ -241,35 +233,3 @@ class Discriminator(nn.Module):
         x = self.final_conv(x)
         x = self.final_linear(x)
         return x
-
-
-class StyleGAN2(nn.Module):
-    def __init__(
-        self,
-        z_dim=512,
-        w_dim=512,
-        mapping_layers=8,
-        resolution=1024,
-    ) -> None:
-        super().__init__()
-        self.mapping_network = MappingNetwork(z_dim, w_dim, mapping_layers)
-        self.generator = Generator(w_dim, resolution)
-        self.discriminator = Discriminator(resolution)
-
-
-if __name__ == "__main__":
-    torch.manual_seed(0)
-    mapping_network = MappingNetwork()
-    generator = Generator()
-    discriminator = Discriminator()
-    z = torch.randn((2, 512))
-    w = mapping_network(z)
-    image = generator(w)
-    a = discriminator(image)
-    print()
-    for name, param in generator.named_parameters():
-        if param.requires_grad:
-            print(name)
-
-    sum(p.numel() for p in generator.parameters() if p.requires_grad)
-    print()
