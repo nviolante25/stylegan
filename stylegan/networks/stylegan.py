@@ -5,7 +5,7 @@ import torch.nn.functional as F
 import math
 
 
-class StyleConv2d(nn.Conv2d):
+class StyleConv2d(nn.Module):
     def __init__(
         self,
         in_channels,
@@ -18,25 +18,22 @@ class StyleConv2d(nn.Conv2d):
         bias=True,
         padding_mode="zeros",
         device=None,
-        dtype=None,
         w_dim=512,
         demodulate=True,
     ):
-        super().__init__(
-            in_channels,
-            out_channels,
-            kernel_size,
-            stride,
-            padding,
-            dilation,
-            groups,
-            bias,
-            padding_mode,
-            device,
-            dtype,
-        )
+        super().__init__()
         self.affine = nn.Linear(w_dim, in_channels, device=device)
         self.demodulate = demodulate
+        self.weight = nn.Parameter(torch.zeros((out_channels, in_channels, kernel_size, kernel_size)))
+        nn.init.kaiming_normal_(self.weight, a=0.2)
+        if bias:
+            self.bias = nn.Parameter(torch.zeros((out_channels,)))
+        else:
+            self.bias = None
+        self.stride = stride
+        self.padding = padding
+        self.dilation = dilation
+        self.kernel_size = kernel_size
 
     def forward(self, input, w):
         """Modulated convolutional 2D forward pass without bias
@@ -53,16 +50,23 @@ class StyleConv2d(nn.Conv2d):
         """
         style = self.affine(w)
         batch_size, in_channels, height, width = input.shape
+        assert (height == width)
+        pad = ((height - 1) * (self.stride - 1) + self.dilation * (self.kernel_size - 1)) // 2
 
-        weight = self.weight.repeat(batch_size, 1, 1, 1, 1) * style.view(batch_size, 1, in_channels, 1, 1)
+        weight = self.weight[None, ...] * style.view(batch_size, 1, in_channels, 1, 1)
         if self.demodulate:
             weight = weight / torch.sqrt(torch.sum(weight**2, dim=(-3, -2, -1), keepdim=True) + 1e-8)
-        self.groups = batch_size
-        output = self._conv_forward(
+            
+        output = F.conv2d(
             input.view(1, -1, height, width),
-            weight.view(-1, in_channels, *self.kernel_size),
-            self.bias.repeat(batch_size, 1).view(-1),
+            weight.view(-1, in_channels, self.kernel_size, self.kernel_size),
+            groups=batch_size,
+            padding=pad,
+            stride=self.stride,
+            dilation=self.dilation,
         ).view(batch_size, -1, height, width)
+        if self.bias is not None:
+            output = output + self.bias[None, :, None, None]
         return output
 
 
@@ -138,14 +142,10 @@ class Generator(nn.Module):
 
     def _init_generator(self, w_dim, resolution, in_channels):
         res = 4
-        self.init_const = nn.Parameter(
-            torch.zeros((1, in_channels[res], res, res)), requires_grad=True
-        )
+        self.init_const = nn.Parameter(torch.zeros((1, in_channels[res], res, res)), requires_grad=True)
         nn.init.normal_(self.init_const)
 
-        self.init_conv = StyleConv2d(
-            in_channels[res], in_channels[res], 3, 1, 1, w_dim=w_dim
-        )
+        self.init_conv = StyleConv2d(in_channels[res], in_channels[res], 3, 1, 1, w_dim=w_dim)
         self.style_blocks = nn.ModuleList()
         while res < resolution:
             next_res = 2 * res

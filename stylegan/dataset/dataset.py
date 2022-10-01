@@ -42,7 +42,7 @@ class Transform:
 
 
 class ImageDataset(Dataset):
-   def __init__(self, source_dir, transform):
+   def __init__(self, source_dir):
       super().__init__()
       self._transform = Transform(Compose([ToTensor(), Lambda(lambda x: 2.0 * x - 1.0)]))
       self._image_paths = self._get_image_paths(source_dir)
@@ -77,7 +77,6 @@ class ImageDataset(Dataset):
       s =  f'Directory   : {self._info.dir}\n'
       s += f'Total images: {self._info.total_images}\n'
       s += f'Image shape : {self._info.image_shape}\n'
-      s += f'Label shape :'
       return s
    
    def __str__(self):
