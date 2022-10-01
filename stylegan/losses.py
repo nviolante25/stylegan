@@ -1,4 +1,5 @@
 import torch.nn.functional as F
+from torch.autograd import grad
 
 
 def generator_loss(fake_logits):
@@ -29,23 +30,7 @@ def discriminator_loss(real_logits, fake_logits):
 def r1_loss(real_logits, real_images):
 
     # Need to set create_graph=True to backpropagate the loss afterwards
-    discriminator_grad = torch.autograd.grad(
-        outputs=real_logits.sum(), inputs=real_images, create_graph=True
-    )[0]
+    discriminator_grad = grad(outputs=real_logits.sum(), inputs=real_images, create_graph=True)[0]
     batch_size = discriminator_grad.shape[0]
     r1_penalty = (discriminator_grad.view(batch_size, -1) ** 2).sum(1).mean()
     return r1_penalty
-
-
-from networks.stylegan import Discriminator
-import torch
-
-if __name__ == "__main__":
-    torch.manual_seed(1)
-    d = Discriminator(512).cuda()
-    image = torch.randn((7, 3, 512, 512)).cuda()
-    image.requires_grad = True
-    logit = d(image)
-    loss = r1_loss(logit, image)
-
-    print()
