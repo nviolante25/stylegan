@@ -116,7 +116,6 @@ class Trainer:
         display_images = (255 * (0.5 * display_images + 0.5)).astype(np.uint8)
         display_images = Image.fromarray(display_images)
         display_images.save(os.path.join(self.outdir, f"fake_images_{str(self.tick).zfill(6)}.png"))
-        self.tick += 1
 
     def save_checkpoint(self):
         checkpoint_path = os.path.join(self.outdir, f"network_{str(self.tick).zfill(6)}.pth")
@@ -131,6 +130,7 @@ class Trainer:
             checkpoint_path,
         )
         self.save_images()
+        self.tick += 1
 
 
 if __name__ == "__main__":
